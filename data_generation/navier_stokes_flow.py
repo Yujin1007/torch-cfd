@@ -50,13 +50,13 @@ def to_torch_split_real_only(lst, device):
 # -------------------------------------------------------
 def run_torch_cfd_spectral_sim_and_save(
     n=256,
-    T=10.0,
+    T=20.0,
     dt=1e-3,
     viscosity=1e-3,
-    max_velocity=7.0,
-    batch_size=8,
+    max_velocity=2.0,
+    batch_size=1, 
     num_snapshots=100,
-    peak_wavenumber=6,
+    peak_wavenumber=2,
     random_state=0,
     out_dir="./torchcfd_spectral_out",
     gif_name="spectral_vorticity.gif",
@@ -251,12 +251,12 @@ class VorticityDataset(torch.utils.data.Dataset):
 if __name__ == "__main__":
     info = run_torch_cfd_spectral_sim_and_save(
         n=128,
-        T=5.0,
+        T=20.0,
         viscosity=1e-3,
-        max_velocity=5,
-        num_snapshots=50,
-        batch_size=4,
-        out_dir="./navier_stokes_flow",
+        max_velocity=2,
+        num_snapshots=100,
+        batch_size=1,
+        out_dir="./dataset/navier_stokes_flow",
     )
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
