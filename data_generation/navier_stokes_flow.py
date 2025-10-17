@@ -8,7 +8,7 @@ import imageio.v2 as imageio
 import matplotlib.pyplot as plt
 import seaborn as sns
 from tqdm import tqdm
-
+import scipy.interpolate as interp
 from torch_cfd.grids import Grid
 from torch_cfd.initial_conditions import filtered_vorticity_field
 from torch_cfd.spectral import *
@@ -45,6 +45,117 @@ def to_torch_split_real_only(lst, device):
     yi = [torch.zeros_like(r) for r in yr]
     return [torch.stack([r, i], dim=-1) for r, i in zip(yr, yi)]
 
+
+def compute_particle_trajectory(u_b, v_b, x_vals, y_vals, t_vals, dt=0.01, start_pos=(-0.5, 0)):
+    """
+    u_b, v_b : (T, nx, ny)
+    x_vals, y_vals : 1D arrays
+    t_vals : time array
+    dt : integration step
+    start_pos : initial particle position
+    """
+    traj_segments = []
+    segment = [start_pos]
+    pos = np.array(start_pos, dtype=float)
+
+    nx, ny = len(x_vals), len(y_vals)
+    xmin, xmax = x_vals.min(), x_vals.max()
+    ymin, ymax = y_vals.min(), y_vals.max()
+    bound = (xmin, xmax, ymin, ymax)
+    # 시간에 따라 velocity interpolation 함수 생성
+    interp_u = [interp.RegularGridInterpolator((x_vals, y_vals), u_b[i], bounds_error=False, fill_value=None)
+                for i in range(len(t_vals))]
+    interp_v = [interp.RegularGridInterpolator((x_vals, y_vals), v_b[i], bounds_error=False, fill_value=None)
+                for i in range(len(t_vals))]
+    for ti in range(len(t_vals)-1):
+        n_steps = int((t_vals[ti+1] - t_vals[ti]) / dt)
+        for _ in range(n_steps):
+            u = interp_u[ti](pos)
+            v = interp_v[ti](pos)
+            pos[0] += dt * u
+            pos[1] += dt * v
+            segment.append(pos.copy())
+
+            # 범위 벗어나면 trajectory 저장 후 초기화
+            if pos[0] < xmin or pos[0] > xmax or pos[1] < ymin or pos[1] > ymax:
+                traj_segments.append(np.array(segment))
+                pos = np.array(start_pos, dtype=float)
+                segment = [pos.copy()]
+                break
+
+    if len(segment) > 1:
+        traj_segments.append(np.array(segment))
+
+    return traj_segments, bound
+
+def save_trajectory_plot(traj_segments, out_dir="./dataset/navier_stokes_flow", fname="trajectory_plot.png", bound=None):
+    plt.figure(figsize=(6,6))
+    for seg in traj_segments:
+        plt.plot(seg[:,0], seg[:,1], '-', lw=1)
+        plt.plot(seg[0,0], seg[0,1], 'go', markersize=3)
+        plt.plot(seg[-1,0], seg[-1,1], 'ro', markersize=3)
+    if bound is not None:
+        plt.xlim(bound[0], bound[1])
+        plt.ylim(bound[2], bound[3])
+    # plt.ylim(-1,1)
+    plt.xlabel('x')
+    plt.ylabel('y')
+    plt.title('Particle Trajectories')
+    plt.savefig(os.path.join(out_dir, fname), dpi=200, bbox_inches="tight")
+    plt.close()
+    print(f"✅ Trajectory plot saved: {os.path.join(out_dir, fname)}")
+import matplotlib.cm as cm
+def save_trajectories_plot(trajectories, out_dir="./dataset/navier_stokes_flow",
+                         fname="trajectory_plot.png", bound=None):
+    """
+    trajectories: list of list
+        예: [ [traj_0_seg_0, traj_0_seg_1], [traj_1_seg_0], [traj_2_seg_0, traj_2_seg_1, ...] ]
+    bound: [xmin, xmax] 또는 [xmin, xmax, ymin, ymax]
+    """
+    plt.figure(figsize=(7, 7))
+    colors = cm.get_cmap('tab10', len(trajectories))  # dataset별 고유 색상
+    
+    label_added = set()  # legend 중복 방지
+    idx = 0  # trajectory index (전체)
+
+    for exp_i, traj_list in enumerate(trajectories):
+        color = colors(exp_i)
+        label = f"Dataset {exp_i+1}"
+        for seg in traj_list:
+            x, y = seg[:, 0], seg[:, 1]
+            if label not in label_added:
+                plt.plot(x, y, '-', color=color, lw=1.5, label=label)
+                label_added.add(label)
+            else:
+                plt.plot(x, y, '-', color=color, lw=1.0)
+            
+            # trajectory 번호 표시 (중앙 혹은 마지막 위치)
+            # cx, cy = x[len(x)//2], y[len(y)//2]
+            # plt.text(cx, cy, f"{idx}", fontsize=7, color=color, ha='center', va='center')
+            idx += 1
+
+    # 범위 설정
+    # if len(bound) == 2:
+    #     xmin, xmax = bound
+    #     ymin, ymax = bound
+    # elif len(bound) == 4:
+    #     xmin, xmax, ymin, ymax = bound
+    # else:
+    #     xmin, xmax, ymin, ymax = -1, 1, -1, 1
+
+    # plt.xlim(xmin, xmax)
+    # plt.ylim(ymin, ymax)
+    plt.xlabel("x")
+    plt.ylabel("y")
+    plt.title("Particle Trajectories from 3 Simulations")
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+    plt.tight_layout()
+
+    path = os.path.join(out_dir, fname)
+    plt.savefig(path, dpi=200)
+    plt.close()
+    print(f"✅ Combined trajectory plot saved: {path}")
 # -------------------------------------------------------
 # 2️⃣ Simulation + GIF + NetCDF
 # -------------------------------------------------------
@@ -60,7 +171,8 @@ def run_torch_cfd_spectral_sim_and_save(
     random_state=0,
     out_dir="./torchcfd_spectral_out",
     gif_name="spectral_vorticity.gif",
-    nc_name="spectral_vorticity.nc",
+    dataset_name="spectral_vorticity.nc",
+    raw_dataset_name="spectral_vorticity.nc",
 ):
     ensure_dir(out_dir)
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
@@ -108,27 +220,29 @@ def run_torch_cfd_spectral_sim_and_save(
     v = fft.irfft2(v_hat).cpu()
 
     # Choose one batch
-    u_b = u[0].numpy()  # (snapshots, nx, ny)
-    v_b = v[0].numpy()
-    vort_b = fft.irfft2(result["vorticity"])[0].cpu().numpy()  # (snapshots, nx, ny)
+    u_b_raw = u[0].numpy()  # (snapshots, nx, ny)
+    v_b_raw = v[0].numpy()
+    vort_b_raw = fft.irfft2(result["vorticity"])[0].cpu().numpy()  # (snapshots, nx, ny)
     # Build xarray dataset
     # (1) Grid normalization: [-1, 1]
     x_vals = np.linspace(-1.0, 1.0, n)
     y_vals = np.linspace(-1.0, 1.0, n)
+    x_raw_vals = np.linspace(0, diam, n, endpoint=False)
+    y_raw_vals = np.linspace(0, diam, n, endpoint=False)
 
-    # (2) Flow normalization: [0, 1]
+    # (2) Flow normalization: [-1, 1]
     def normalize_field(field):
         fmin, fmax = field.min(), field.max()
         if fmax == fmin:
             return np.zeros_like(field)
-        return (field - fmin) / (fmax - fmin)
+        return 2 * (field - fmin) / (fmax - fmin) - 1
 
-    u_b = normalize_field(u_b)
-    v_b = normalize_field(v_b)
-    vort_b = normalize_field(vort_b)
+    u_b = normalize_field(u_b_raw)
+    v_b = normalize_field(v_b_raw)
+    vort_b = normalize_field(vort_b_raw)
 
     # (3) Time
-    t_vals = np.linspace(0, 1, u_b.shape[0])  # normalized 0~1 for time (optional)
+    t_vals = np.linspace(0, u_b.shape[0]*0.1, u_b.shape[0])  # normalized 0~1 for time (optional)
 
     # (4) xarray dataset construction
     coords = {"time": t_vals, "x": x_vals, "y": y_vals}
@@ -140,16 +254,28 @@ def run_torch_cfd_spectral_sim_and_save(
         ),
         coords=coords,
     )
-    nc_path = os.path.join(out_dir, nc_name)
+    coords_raw = {"time": t_vals, "x": x_raw_vals, "y": y_raw_vals}
+    ds_raw = xr.Dataset(
+        data_vars=dict(
+            u=(("time", "x", "y"), u_b_raw),
+            v=(("time", "x", "y"), v_b_raw),
+            vorticity=(("time", "x", "y"), vort_b_raw),
+        ),
+        coords=coords_raw,
+    )
+    nc_path = os.path.join(out_dir, dataset_name)
+    nc_path_raw = os.path.join(out_dir, raw_dataset_name)
     engine, encoding = choose_netcdf_engine_and_encoding()
 
     if encoding is None:
         ds.to_netcdf(nc_path, engine=engine)
+        ds_raw.to_netcdf(nc_path_raw, engine=engine)
     else:
         ds.to_netcdf(nc_path, engine=engine, encoding=encoding)
+        ds_raw.to_netcdf(nc_path_raw, engine=engine, encoding=encoding)
 
     print(f"💾 Saved NetCDF: {nc_path}")
-
+    print(f"💾 Saved Raw NetCDF: {nc_path_raw}")
     # Save GIF (vorticity evolution)
     frames_dir = os.path.join(out_dir, "frames_vorticity")
     ensure_dir(frames_dir)
@@ -244,26 +370,98 @@ class VorticityDataset(torch.utils.data.Dataset):
         y_prev = self.y_list[idx]
         y_next = self.y_list[idx + 1]
         return t_prev, t_next, coords, y_next, y_prev
+def merge_datasets(out_dir: str, num_traj: int, save_name: str = "dataset_merged.nc"):
+    datasets = []
 
+    for i in range(num_traj):
+        dataset_name = f"dataset_{i}.nc"
+        data_path = os.path.join(out_dir, dataset_name)
+
+        if not os.path.exists(data_path):
+            print(f"⚠️  Warning: {data_path} not found, skipping.")
+            continue
+
+        ds = xr.open_dataset(data_path)
+        datasets.append(ds)
+
+    if not datasets:
+        raise ValueError("❌ No datasets were loaded. Check your paths or num_traj value.")
+
+    # realization 차원으로 합치기
+    ds_merged = xr.concat(datasets, dim="realization")
+
+    # realization 좌표 추가 (0, 1, 2, ...)
+    ds_merged = ds_merged.assign_coords(realization=("realization", list(range(len(datasets)))))
+
+    # 저장
+    merged_path = os.path.join(out_dir, save_name)
+    ds_merged.to_netcdf(merged_path)
+
+    print(f"✅ Merged {len(datasets)} datasets into {merged_path}")
+    print(f"   → Dimensions: {ds_merged.dims}")
+
+    return ds_merged
 # -------------------------------------------------------
 # 5️⃣ Example Usage
 # -------------------------------------------------------
 if __name__ == "__main__":
-    info = run_torch_cfd_spectral_sim_and_save(
-        n=128,
-        T=20.0,
-        viscosity=1e-3,
-        max_velocity=2,
-        num_snapshots=100,
-        batch_size=1,
-        out_dir="./dataset/navier_stokes_flow",
-    )
+    out_dir = "./dataset/navier_stokes_flow/multiple_traj"
+    trajectories = []
+    nun_traj = 10
+    for i in range(nun_traj):
+        print(f"================ Experiment {i+1} ================")
+        dataset_name = f"dataset_{i}.nc"
+        raw_dataset_name = f"raw_dataset_{i}.nc"
+        sim_info = run_torch_cfd_spectral_sim_and_save(
+            n=128,
+            T=10.0,
+            viscosity=1e-3+np.random.rand()*5e-2,
+            max_velocity=2+np.random.rand()*2,
+            num_snapshots=30,
+            batch_size=3,
+            out_dir=out_dir,
+            dataset_name=dataset_name,
+            raw_dataset_name=raw_dataset_name,
+        )
+        data_path = os.path.join(out_dir, raw_dataset_name)
+        ds = xr.open_dataset(data_path)
+        u_b = ds["u"].values  # (T, nx, ny)
+        v_b = ds["v"].values
+        x_vals = ds["x"].values
+        y_vals = ds["y"].values
+        t_vals = ds["time"].values
+        print(f"time: {t_vals.shape}, x: {x_vals.shape}, y: {y_vals.shape}, u/v: {u_b.shape}")
+        trajectory, bound = compute_particle_trajectory(u_b, v_b, x_vals, y_vals, t_vals, dt=1e-3, start_pos=(3,3))
+        trajectories.append(trajectory)
+        np.save(os.path.join(out_dir, "particle_trajectory.npy"), trajectories)
+        # print("💾 Saved trajectory data (.npy)")
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    t_list, coords_list, y_list, y_full, coords_full = load_spectral_nc_as_grayscott_compatible(
-        info["nc_path"], sample_ratio=0.1, normalize_t=True, device=device
-    )
-    dataset = VorticityDataset(t_list, coords_list, y_list)
-    print(f"Dataset length: {len(dataset)}")
-    tp, tn, c, yn, yp = dataset[0]
-    print(f"Example shapes -> coords:{c.shape}, y_next:{yn.shape}, y_prev:{yp.shape}")
+    merge_datasets(out_dir, num_traj=nun_traj)
+
+    # save_trajectories_plot(trajectories, out_dir=out_dir, fname="trajectory_plot.png", bound=bound)
+    '''generate single dataset'''
+    # info = run_torch_cfd_spectral_sim_and_save(
+    #     n=128,
+    #     T=20.0,
+    #     viscosity=1e-3,
+    #     max_velocity=2,
+    #     num_snapshots=1000,
+    #     batch_size=5,
+    #     out_dir="./dataset/navier_stokes_flow",
+    #     dataset_name="dataset_slow.nc",
+    #     raw_dataset_name="raw_dataset_slow.nc",
+    #     gif_name="spectral_vorticity_slow.gif",
+    # )
+    '''load dataset'''
+    # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    # out_dir = "./dataset/navier_stokes_flow"
+    # data_path = "./dataset/navier_stokes_flow/raw_dataset_slow.nc"
+    # ds = xr.open_dataset(data_path)
+    # u_b = ds["u"].values  # (T, nx, ny)
+    # v_b = ds["v"].values
+    # x_vals = ds["x"].values
+    # y_vals = ds["y"].values
+    # t_vals = ds["time"].values
+    # print(f"time: {t_vals.shape}, x: {x_vals.shape}, y: {y_vals.shape}, u/v: {u_b.shape}")
+
+    

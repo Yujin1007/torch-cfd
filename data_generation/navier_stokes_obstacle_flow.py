@@ -45,7 +45,7 @@ def run_torch_cfd_sim_and_save(
     nx=400, ny=200,
     density=1.0,
     dt=1e-3,           # 시뮬레이션 내부 dt
-    T=20.0,            # 전체 물리시간
+    T=2.0,            # 전체 물리시간
     viscosity=1/500,
     batch_size=8,
     domain=((0.0, 2.0), (0.0, 1.0)),
@@ -159,19 +159,16 @@ def run_torch_cfd_sim_and_save(
     x_vals = np.linspace(-1.0, 1.0, nx)
     y_vals = np.linspace(-1.0, 1.0, ny)
 
-    # (2) Flow normalization: [0, 1]
     def normalize_field(field):
-        fmin, fmax = field.min(), field.max()
-        if fmax == fmin:
-            return np.zeros_like(field)
-        return (field - fmin) / (fmax - fmin)
+        fmin, fmax = np.percentile(field, [2, 98])  # outlier 제거
+        return np.clip(2 * (field - fmin) / (fmax - fmin) - 1, -1, 1)
 
     u_b = normalize_field(u_b)
     v_b = normalize_field(v_b)
     vort_b = normalize_field(vort_b)
 
     # (3) Time
-    t_vals = np.linspace(0, 1, u_b.shape[0])  # normalized 0~1 for time (optional)
+    t_vals = np.linspace(0, u_b.shape[0]*0.1, u_b.shape[0])  # normalized 0~1 for time (optional)
 
     # (4) xarray dataset construction
     coords = {"time": t_vals, "x": x_vals, "y": y_vals}
@@ -198,7 +195,7 @@ def run_torch_cfd_sim_and_save(
             vort_b[i].T,  # (x,y)->imshow는 y가 세로축이므로 보기 좋게 T
             origin="lower",
             extent=(-1, 1, -1, 1),
-            vmin=0, vmax=1,
+            vmin=-1, vmax=1,
             cmap=sns.cm.vlag,
             aspect="auto",
         )
@@ -295,13 +292,15 @@ class VorticityDataset(torch.utils.data.Dataset):
 # ======================================================
 if __name__ == "__main__":
     info = run_torch_cfd_sim_and_save(
-        nx=200, ny=200,
+        nx=32, ny=32,
+        # nx=100, ny=100,
         dt=1e-3, T=20.0,
         update_steps=100,
         batch_index=0,
         out_dir="./dataset/navier_stokes_obstacle_flow",
-        gif_name="obstacle_flow_vorticity.gif",
-        nc_name="obstacle_flow.nc",
+        gif_name="obstacle_flow_vorticity_low_res.gif",
+        nc_name="obstacle_flow_low_res.nc",
+        batch_size=1,
     )
     print(f"[Saved] GIF: {info['gif_path']}")
     print(f"[Saved] NetCDF: {info['nc_path']}")
