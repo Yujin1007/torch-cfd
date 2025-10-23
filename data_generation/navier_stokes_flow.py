@@ -68,8 +68,9 @@ def compute_particle_trajectory(u_b, v_b, x_vals, y_vals, t_vals, dt=0.01, start
     interp_v = [interp.RegularGridInterpolator((x_vals, y_vals), v_b[i], bounds_error=False, fill_value=None)
                 for i in range(len(t_vals))]
     for ti in range(len(t_vals)-1):
-        n_steps = int((t_vals[ti+1] - t_vals[ti]) / dt)
+        n_steps = 10 # int((t_vals[ti+1] - t_vals[ti]) / dt)
         for _ in range(n_steps):
+        # for _ in t_vals[0]:
             u = interp_u[ti](pos)
             v = interp_v[ti](pos)
             pos[0] += dt * u
@@ -97,6 +98,7 @@ def save_trajectory_plot(traj_segments, out_dir="./dataset/navier_stokes_flow", 
     if bound is not None:
         plt.xlim(bound[0], bound[1])
         plt.ylim(bound[2], bound[3])
+    
     # plt.ylim(-1,1)
     plt.xlabel('x')
     plt.ylabel('y')
@@ -135,16 +137,16 @@ def save_trajectories_plot(trajectories, out_dir="./dataset/navier_stokes_flow",
             idx += 1
 
     # 범위 설정
-    # if len(bound) == 2:
-    #     xmin, xmax = bound
-    #     ymin, ymax = bound
-    # elif len(bound) == 4:
-    #     xmin, xmax, ymin, ymax = bound
+    if len(bound) == 2:
+        xmin, xmax = bound
+        ymin, ymax = bound
+    elif len(bound) == 4:
+        xmin, xmax, ymin, ymax = bound
     # else:
     #     xmin, xmax, ymin, ymax = -1, 1, -1, 1
 
-    # plt.xlim(xmin, xmax)
-    # plt.ylim(ymin, ymax)
+    plt.xlim(xmin, xmax)
+    plt.ylim(ymin, ymax)
     plt.xlabel("x")
     plt.ylabel("y")
     plt.title("Particle Trajectories from 3 Simulations")
@@ -237,10 +239,30 @@ def run_torch_cfd_spectral_sim_and_save(
             return np.zeros_like(field)
         return 2 * (field - fmin) / (fmax - fmin) - 1
 
+
     u_b = normalize_field(u_b_raw)
     v_b = normalize_field(v_b_raw)
     vort_b = normalize_field(vort_b_raw)
 
+    '''Crop dataset'''
+        # 🔹 crop 범위 지정 (예: 중심 128×128 영역)
+    crop_x_start, crop_x_end = 64, 192
+    crop_y_start, crop_y_end = 64, 192
+
+    # 🔹 crop 적용
+    u_b = u_b[:, crop_x_start:crop_x_end, crop_y_start:crop_y_end]
+    v_b = v_b[:, crop_x_start:crop_x_end, crop_y_start:crop_y_end]
+    vort_b = vort_b[:, crop_x_start:crop_x_end, crop_y_start:crop_y_end]
+
+    u_b_raw = u_b_raw[:, crop_x_start:crop_x_end, crop_y_start:crop_y_end]
+    v_b_raw = v_b_raw[:, crop_x_start:crop_x_end, crop_y_start:crop_y_end]
+    vort_b_raw = vort_b_raw[:, crop_x_start:crop_x_end, crop_y_start:crop_y_end]
+
+    # 🔹 crop된 좌표도 맞춰줌
+    x_vals = np.linspace(-1.0, 1.0, n)[crop_x_start:crop_x_end]
+    y_vals = np.linspace(-1.0, 1.0, n)[crop_y_start:crop_y_end]
+    x_raw_vals = np.linspace(0, diam, n, endpoint=False)[crop_x_start:crop_x_end]
+    y_raw_vals = np.linspace(0, diam, n, endpoint=False)[crop_y_start:crop_y_end]
     # (3) Time
     t_vals = np.linspace(0, u_b.shape[0]*0.1, u_b.shape[0])  # normalized 0~1 for time (optional)
 
@@ -407,7 +429,8 @@ def merge_datasets(out_dir: str, num_traj: int, save_name: str = "dataset_merged
 if __name__ == "__main__":
     out_dir = "./dataset/navier_stokes_flow/multiple_traj"
     trajectories = []
-    nun_traj = 10
+    nun_traj = 3
+    np.random.seed(42)
     for i in range(nun_traj):
         print(f"================ Experiment {i+1} ================")
         dataset_name = f"dataset_{i}.nc"
@@ -431,15 +454,17 @@ if __name__ == "__main__":
         x_vals = ds["x"].values
         y_vals = ds["y"].values
         t_vals = ds["time"].values
-        print(f"time: {t_vals.shape}, x: {x_vals.shape}, y: {y_vals.shape}, u/v: {u_b.shape}")
-        trajectory, bound = compute_particle_trajectory(u_b, v_b, x_vals, y_vals, t_vals, dt=1e-3, start_pos=(3,3))
+        init_pos = (sum(x_vals)/len(x_vals), sum(y_vals)/len(y_vals))
+        # define particle dt ( make it  faster to see evident divergence )
+        dt = 0.02
+        trajectory, bound = compute_particle_trajectory(u_b, v_b, x_vals, y_vals, t_vals, dt=dt, start_pos=init_pos)
         trajectories.append(trajectory)
-    np.save(os.path.join(out_dir, "particle_trajectory.npy"), trajectories)
+    # np.save(os.path.join(out_dir, "particle_trajectory.npy"), trajectories)
         # print("💾 Saved trajectory data (.npy)")
 
     merge_datasets(out_dir, num_traj=nun_traj)
 
-    # save_trajectories_plot(trajectories, out_dir=out_dir, fname="trajectory_plot.png", bound=bound)
+    save_trajectories_plot(trajectories, out_dir=out_dir, fname=f"trajectory_plot_{dt}.png", bound=bound)
     '''generate single dataset'''
     # info = run_torch_cfd_spectral_sim_and_save(
     #     n=128,
