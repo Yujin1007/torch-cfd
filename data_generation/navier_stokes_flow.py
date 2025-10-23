@@ -230,9 +230,9 @@ def run_torch_cfd_spectral_sim_and_save(
     x_raw_vals = np.linspace(0, diam, n, endpoint=False)
     y_raw_vals = np.linspace(0, diam, n, endpoint=False)
 
-    # (2) Flow normalization: [-1, 1]
+
     def normalize_field(field):
-        fmin, fmax = field.min(), field.max()
+        fmin, fmax = np.percentile(field, [2, 98])
         if fmax == fmin:
             return np.zeros_like(field)
         return 2 * (field - fmin) / (fmax - fmin) - 1
@@ -417,11 +417,12 @@ if __name__ == "__main__":
             T=10.0,
             viscosity=1e-3+np.random.rand()*5e-2,
             max_velocity=2+np.random.rand()*2,
-            num_snapshots=30,
-            batch_size=3,
+            num_snapshots=20,
+            batch_size=1,
             out_dir=out_dir,
             dataset_name=dataset_name,
             raw_dataset_name=raw_dataset_name,
+            gif_name=f"spectral_vorticity_{i}.gif",
         )
         data_path = os.path.join(out_dir, raw_dataset_name)
         ds = xr.open_dataset(data_path)
@@ -433,7 +434,7 @@ if __name__ == "__main__":
         print(f"time: {t_vals.shape}, x: {x_vals.shape}, y: {y_vals.shape}, u/v: {u_b.shape}")
         trajectory, bound = compute_particle_trajectory(u_b, v_b, x_vals, y_vals, t_vals, dt=1e-3, start_pos=(3,3))
         trajectories.append(trajectory)
-        np.save(os.path.join(out_dir, "particle_trajectory.npy"), trajectories)
+    np.save(os.path.join(out_dir, "particle_trajectory.npy"), trajectories)
         # print("💾 Saved trajectory data (.npy)")
 
     merge_datasets(out_dir, num_traj=nun_traj)
