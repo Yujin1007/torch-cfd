@@ -54,6 +54,11 @@ def compute_particle_trajectory(u_b, v_b, x_vals, y_vals, t_vals, dt=0.01, start
     dt : integration step
     start_pos : initial particle position
     """
+    print(f"u_b shape: {u_b.shape}")
+    print(f"v_b shape: {v_b.shape}")
+    print(f"x_vals shape: {x_vals.shape}")
+    print(f"y_vals shape: {y_vals.shape}")
+    print(f"t_vals shape: {t_vals.shape}")
     traj_segments = []
     segment = [start_pos]
     pos = np.array(start_pos, dtype=float)
@@ -233,16 +238,18 @@ def run_torch_cfd_spectral_sim_and_save(
     y_raw_vals = np.linspace(0, diam, n, endpoint=False)
 
 
-    def normalize_field(field):
-        fmin, fmax = np.percentile(field, [2, 98])
+    def normalize_field(field, fmin=None, fmax=None):
+        # fmin, fmax = np.percentile(field, [2, 98])
+        # print(f"fmin: {fmin}({min(field.flatten())}), fmax: {fmax}({max(field.flatten())})")
+
         if fmax == fmin:
             return np.zeros_like(field)
         return 2 * (field - fmin) / (fmax - fmin) - 1
 
 
-    u_b = normalize_field(u_b_raw)
-    v_b = normalize_field(v_b_raw)
-    vort_b = normalize_field(vort_b_raw)
+    u_b = normalize_field(u_b_raw, fmin=-1.5, fmax=1.5)
+    v_b = normalize_field(v_b_raw, fmin=-1.5, fmax=1.5)
+    vort_b = normalize_field(vort_b_raw, fmin=-4, fmax=4.5)
 
     '''Crop dataset'''
         # 🔹 crop 범위 지정 (예: 중심 128×128 영역)
@@ -427,27 +434,34 @@ def merge_datasets(out_dir: str, num_traj: int, save_name: str = "dataset_merged
 # 5️⃣ Example Usage
 # -------------------------------------------------------
 if __name__ == "__main__":
-    out_dir = "./dataset/navier_stokes_flow/multiple_traj"
-    trajectories = []
-    nun_traj = 3
+    out_dir = "./dataset/navier_stokes_flow/multiple_traj3"
+    generate_dataset = False
+    nun_traj = 2
     np.random.seed(42)
+    trajectories = []
+    if generate_dataset:
+        for i in range(nun_traj):
+            print(f"================ Experiment {i+1} ================")
+            dataset_name = f"dataset_{i}.nc"
+            raw_dataset_name = f"raw_dataset_{i}.nc"
+            sim_info = run_torch_cfd_spectral_sim_and_save(
+                n=128,
+                T=10.0,
+                viscosity=1e-3+np.random.rand()*5e-2,
+                max_velocity=2+np.random.rand()*2,
+                num_snapshots=20,
+                batch_size=1,
+                out_dir=out_dir,
+                dataset_name=dataset_name,
+                raw_dataset_name=raw_dataset_name,
+                gif_name=f"spectral_vorticity_{i}.gif",
+            )
+        
+        merge_datasets(out_dir, num_traj=nun_traj, save_name="dataset_merged.nc")
     for i in range(nun_traj):
-        print(f"================ Experiment {i+1} ================")
         dataset_name = f"dataset_{i}.nc"
         raw_dataset_name = f"raw_dataset_{i}.nc"
-        sim_info = run_torch_cfd_spectral_sim_and_save(
-            n=128,
-            T=10.0,
-            viscosity=1e-3+np.random.rand()*5e-2,
-            max_velocity=2+np.random.rand()*2,
-            num_snapshots=20,
-            batch_size=1,
-            out_dir=out_dir,
-            dataset_name=dataset_name,
-            raw_dataset_name=raw_dataset_name,
-            gif_name=f"spectral_vorticity_{i}.gif",
-        )
-        data_path = os.path.join(out_dir, raw_dataset_name)
+        data_path = os.path.join(out_dir, raw_dataset_name) 
         ds = xr.open_dataset(data_path)
         u_b = ds["u"].values  # (T, nx, ny)
         v_b = ds["v"].values
@@ -455,6 +469,10 @@ if __name__ == "__main__":
         y_vals = ds["y"].values
         t_vals = ds["time"].values
         init_pos = (sum(x_vals)/len(x_vals), sum(y_vals)/len(y_vals))
+        print(f"init_pos: {init_pos}")
+        print(f"x_vals: {x_vals}")
+        print(f"y_vals: {y_vals}")
+        print(f"t_vals: {t_vals}")
         # define particle dt ( make it  faster to see evident divergence )
         dt = 0.02
         trajectory, bound = compute_particle_trajectory(u_b, v_b, x_vals, y_vals, t_vals, dt=dt, start_pos=init_pos)
@@ -462,7 +480,6 @@ if __name__ == "__main__":
     # np.save(os.path.join(out_dir, "particle_trajectory.npy"), trajectories)
         # print("💾 Saved trajectory data (.npy)")
 
-    merge_datasets(out_dir, num_traj=nun_traj)
 
     save_trajectories_plot(trajectories, out_dir=out_dir, fname=f"trajectory_plot_{dt}.png", bound=bound)
     '''generate single dataset'''
